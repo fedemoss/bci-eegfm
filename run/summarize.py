@@ -16,8 +16,8 @@ import pandas as pd
 
 HOME = Path(os.environ.get("EEGFM_HOME", Path(__file__).resolve().parents[1]))
 WORK = Path(os.environ.get("WORK", HOME / "work"))
-OUTPUTS = WORK / "2026-competition/tracks/bci_decoding/outputs"
-LOGS = WORK / "logs/cbramod"
+OUTPUTS = Path(os.environ.get("BENCH", WORK / "input/2026-competition/tracks/bci_decoding")) / "outputs"
+LOGS = Path(os.environ.get("LOGS", WORK / "output/logs"))
 
 _PARAM = re.compile(r"(\w+)=([^,\]]+)")
 _ARM = re.compile(r"^\[CBraMod\] arm=(\S+) init=(\S+) head=(\S+) gain=(\S+)")

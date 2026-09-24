@@ -3,7 +3,11 @@
 # Idempotent: downloads, then runs the extraction once so later runs hit warm caches.
 set -euo pipefail
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$EEGFM_HOME/env.sh"
+if [ -n "${SITE:-}" ] && [ -f "$EEGFM_HOME/site/$SITE.sh" ]; then
+    source "$EEGFM_HOME/site/$SITE.sh"
+else
+    source "$EEGFM_HOME/env.sh"
+fi
 
 echo "Staging Dreyer2023 into $BENCHOPT_DATA_HOME (this takes a while)..."
 benchopt prepare "$BENCH" -d "BCI[study=dreyer2023]"

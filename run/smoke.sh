@@ -4,7 +4,11 @@
 # The SCORES ARE MEANINGLESS at 2 epochs — this only proves the code paths run.
 set -euo pipefail
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$EEGFM_HOME/env.sh"
+if [ -n "${SITE:-}" ] && [ -f "$EEGFM_HOME/site/$SITE.sh" ]; then
+    source "$EEGFM_HOME/site/$SITE.sh"
+else
+    source "$EEGFM_HOME/env.sh"
+fi
 
 cd "$BENCH_REPO"
 benchopt prepare "$BENCH" -d "BCI[study=tangermann2012]"

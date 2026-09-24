@@ -4,8 +4,12 @@
 # so the file has to physically live there.
 set -euo pipefail
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK="${WORK:-$EEGFM_HOME/work}"
-DEST="$WORK/2026-competition/tracks/bci_decoding/solvers"
+if [ -n "${SITE:-}" ] && [ -f "$EEGFM_HOME/site/$SITE.sh" ]; then
+    source "$EEGFM_HOME/site/$SITE.sh"
+else
+    source "$EEGFM_HOME/env.sh"
+fi
+DEST="$BENCH/solvers"
 
 [ -d "$DEST" ] || { echo "benchmark not found at $DEST — run setup.sh first"; exit 1; }
 cp "$EEGFM_HOME/solvers/eegfm.py" "$DEST/eegfm.py"

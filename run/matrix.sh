@@ -13,7 +13,11 @@
 set -euo pipefail
 
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$EEGFM_HOME/env.sh"
+if [ -n "${SITE:-}" ] && [ -f "$EEGFM_HOME/site/$SITE.sh" ]; then
+    source "$EEGFM_HOME/site/$SITE.sh"
+else
+    source "$EEGFM_HOME/env.sh"
+fi
 
 DATASET="${DATASET:-BCI[study=dreyer2023,num_workers=4]}"
 GAIN="${GAIN:-1.0}"
@@ -26,8 +30,8 @@ TENT_DIV="${TENT_DIV:-1.0}"
 TTT_CHUNK="${TTT_CHUNK:-1}"
 HEAD="${HEAD:-avgpool}"    # paper: 1 sample per adaptation step
 
-OUT="$WORK/results/cbramod"
-LOGS="$WORK/logs/cbramod"
+OUT="$RESULTS"
+: "${LOGS:?source env.sh first}"
 mkdir -p "$OUT" "$LOGS"
 
 cd "$BENCH_REPO"

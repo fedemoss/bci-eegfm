@@ -15,38 +15,63 @@ sit on the same scale as the shipped baselines:
 
 ---
 
-## Quick start on the server
+## Quick start on the UdeSA cluster (pinky)
+
+Code in `$HOME`, everything generated on `/share/data1` — `site/pinky.sh` sets
+that split, so source it instead of `env.sh`.
 
 ```bash
-git clone <this-repo> ~/bci-eegfm && cd ~/bci-eegfm
+# --- login node (it has network; compute nodes do not) ---
+git clone https://github.com/fedemoss/bci-eegfm.git ~/projects/bci-eegfm
+cd ~/projects/bci-eegfm
 
-# 1. login node — builds the conda env, clones the benchmark, installs the solver
-nvidia-smi                                  # check the driver, pick the channel
-TORCH_CHANNEL=https://download.pytorch.org/whl/cu126 bash setup.sh
+SITE=pinky TORCH_CHANNEL=https://download.pytorch.org/whl/cu121 bash setup.sh
+source site/pinky.sh
 
-# 2. login node — stages ~19 GB of Dreyer2023 (compute nodes have no network)
-source env.sh && bash prepare_data.sh
+bash prepare_data.sh                       # ~19 GB of Dreyer2023, takes a while
+python -m eegfm.smoke_test reve_large      # warms the HF cache (1.56 GB)
 
-# 3. 5-minute plumbing check on a small study (scores are meaningless, paths aren't)
-bash run/smoke.sh
-
-# 4. the real thing
-sbatch run/eegfm.sbatch                   # or: bash run/matrix.sh
+# --- compute node ---
+sbatch run/eegfm_smoke.sh                  # plumbing check, every arm, 2 epochs
+sbatch run/eegfm_matrix.sh                 # the real matrix
+squeue -u $USER
 python run/summarize.py
 ```
 
-Edit `--partition` / `--account` in `run/eegfm.sbatch` before submitting.
-
-**Put the data on scratch.** `WORK` defaults to `./work` inside the repo; set it
-to a scratch filesystem instead, and keep it exported everywhere:
-
-```bash
-export WORK=/scratch/$USER/bci        # before sourcing env.sh
-```
+`cuda/12.1` is the newest module on this cluster, hence the cu121 wheel.
+`run/eegfm_*.sh` request `--gres=gpu:l4:1`: GPUs are consumable here
+(`GresTypes=gpu`, `select/cons_tres`), so a job that does not ask for one does
+not get one. L4 (c3, c6) is 24 GB; the T4s on c2 are 16 GB and too tight for
+`reve_large` fine-tuning. Memory is not tracked on this cluster
+(`RealMemory=1`), so no `--mem`.
 
 After every `git pull`, re-run `bash install_solver.sh` — benchopt discovers
 solvers by scanning the benchmark's `solvers/` folder, so the file has to
 physically live there.
+
+### Layout on disk
+
+```
+~/projects/bci-eegfm/                      code only (git)
+/share/data1/mossf/data/bci-eegfm/
+├── input/                                 staged, all re-downloadable
+│   ├── 2026-competition/                  the benchopt benchmark
+│   ├── data/                              Dreyer2023, ~19 GB
+│   ├── cache/                             preprocessed windows
+│   └── hf/                                HF_HOME — REVE checkpoints
+└── output/
+    ├── results/<backbone>_<arm>_<init>/   weights + submission.py per arm
+    └── logs/                              run logs + slurm .out files
+```
+
+`$HOME` on this cluster is 83% full with ~26 GB free, which is why nothing
+generated goes there. `/share/data1` has ~120 GB free; budget ~40 GB for
+Dreyer plus its caches and ~2 GB for the REVE checkpoints.
+
+### Elsewhere
+
+Without `SITE`, `WORK` defaults to `./work` inside the repo and the same
+`input/`, `output/` split applies. Set `WORK` to point anywhere else.
 
 ---
 
@@ -214,6 +239,7 @@ plain EEGNet scores 0.5825 on that dataset. Expect the foundation arms to start
 
 ```
 env.sh              paths + conda activation — source this first
+site/pinky.sh       UdeSA cluster profile: scratch conda + /share/data1
 setup.sh            one-time: conda env, clone the benchmark, install the solver
 prepare_data.sh     stage Dreyer2023 (~19 GB, login node)
 install_solver.sh   copy solvers/eegfm.py into the benchmark (re-run after git pull)
@@ -227,7 +253,8 @@ weights/            three CBraMod checkpoints, ~20 MB each (REVE comes from the 
 run/
   smoke.sh          5-minute plumbing check
   matrix.sh         the experiment matrix
-  eegfm.sbatch      slurm wrapper
+  eegfm_matrix.sh   sbatch wrapper for the matrix (cluster convention)
+  eegfm_smoke.sh    sbatch wrapper for the plumbing check
   summarize.py      joins grouped-val (from logs) with test (from parquet)
 notes/FINDINGS.md   what was measured before this repo existed — read this
 work/               gitignored: benchmark clone, data, caches, results, logs

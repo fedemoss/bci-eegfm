@@ -7,19 +7,26 @@
 set -euo pipefail
 
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK="${WORK:-$EEGFM_HOME/work}"
 TORCH_CHANNEL="${TORCH_CHANNEL:-https://download.pytorch.org/whl/cu126}"
-BENCH_REPO="$WORK/2026-competition"
 
-module load cuda 2>/dev/null || true
-source "$(conda info --base)/etc/profile.d/conda.sh"
-
-mkdir -p "$WORK"/{data,cache,results,logs}
-
-if ! conda env list | grep -q "^bci26 "; then
-    conda create -y -n bci26 python=3.12 pip
+# Site profile first (sets WORK / CONDA_BASE), else the plain layout.
+if [ -n "${SITE:-}" ] && [ -f "$EEGFM_HOME/site/$SITE.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$EEGFM_HOME/site/$SITE.sh"
+else
+    # shellcheck disable=SC1091
+    source "$EEGFM_HOME/env.sh"
 fi
-conda activate bci26
+
+_conda_base="${CONDA_BASE:-$(conda info --base)}"
+# shellcheck disable=SC1091
+source "$_conda_base/etc/profile.d/conda.sh"
+
+ENV_NAME="${CONDA_ENV:-bci26}"
+if ! conda env list | grep -qE "^${ENV_NAME}\s"; then
+    conda create -y -n "$ENV_NAME" python=3.12 pip
+fi
+conda activate "$ENV_NAME"
 
 # The competition benchmark is a separate repo — it is what benchopt runs, and
 # it is not vendored here so it can be pulled independently.
@@ -41,9 +48,9 @@ cat > "$HOME/.neuralbench/config.json" <<EOF
   "USER": "$USER",
   "ENTITY_NAME": "$USER",
   "PROJECT_NAME": "neuralbench",
-  "DATA_DIR": "$WORK/data",
-  "CACHE_DIR": "$WORK/cache",
-  "SAVE_DIR": "$WORK/results",
+  "DATA_DIR": "$INPUT/data",
+  "CACHE_DIR": "$INPUT/cache",
+  "SAVE_DIR": "$RESULTS",
   "WANDB_HOST": "",
   "SLURM_PARTITION": "",
   "SLURM_CONSTRAINT": "",
