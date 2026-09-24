@@ -1,5 +1,5 @@
 # Source this before anything else, on the laptop or the server:
-#   source ~/bci-cbramod/env.sh
+#   source ~/bci-eegfm/env.sh
 EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export EEGFM_HOME
 export EEGFM_WEIGHTS="$EEGFM_HOME/weights"

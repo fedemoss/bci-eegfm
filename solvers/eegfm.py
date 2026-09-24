@@ -36,7 +36,7 @@ from torch import nn
 
 from benchmark_utils.base_solver import CompetSolver
 
-# This solver is shipped by the bci-cbramod repo and copied into the benchmark
+# This solver is shipped by the bci-eegfm repo and copied into the benchmark
 # by ``install_solver.sh``; ``EEGFM_HOME`` points back at that repo so the
 # vendored backbone stays importable from wherever benchopt loads this file.
 _HOME = Path(os.environ.get("EEGFM_HOME", Path(__file__).resolve().parents[3]))

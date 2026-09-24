@@ -8,7 +8,7 @@
 #   bash push.sh [repo-name] [private|public]
 set -euo pipefail
 
-NAME="${1:-bci-cbramod}"
+NAME="${1:-bci-eegfm}"
 VIS="${2:-private}"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

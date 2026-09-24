@@ -1,4 +1,4 @@
-# bci-cbramod
+# bci-eegfm
 
 EEG foundation models (**CBraMod**, **REVE**) + NeuroTTT arms for **Neural Interfaces 2026, Track 2 (BCI decoding)**,
 evaluated on the warm-up study **Dreyer2023Large** (27 ch, 2-class motor
@@ -18,7 +18,7 @@ sit on the same scale as the shipped baselines:
 ## Quick start on the server
 
 ```bash
-git clone <this-repo> ~/bci-cbramod && cd ~/bci-cbramod
+git clone <this-repo> ~/bci-eegfm && cd ~/bci-eegfm
 
 # 1. login node — builds the conda env, clones the benchmark, installs the solver
 nvidia-smi                                  # check the driver, pick the channel

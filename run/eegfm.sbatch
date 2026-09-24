@@ -18,7 +18,7 @@
 # prepare_data.sh on a login node first.
 set -euo pipefail
 
-EEGFM_HOME="${EEGFM_HOME:-$HOME/bci-cbramod}"
+EEGFM_HOME="${EEGFM_HOME:-$HOME/bci-eegfm}"
 source "$EEGFM_HOME/env.sh"
 
 nvidia-smi || true
