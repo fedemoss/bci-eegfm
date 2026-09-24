@@ -25,7 +25,7 @@ that split, so source it instead of `env.sh`.
 git clone https://github.com/fedemoss/bci-eegfm.git ~/projects/bci-eegfm
 cd ~/projects/bci-eegfm
 
-SITE=pinky TORCH_CHANNEL=https://download.pytorch.org/whl/cu121 bash setup.sh
+SITE=pinky bash setup.sh          # cu126 by default
 source site/pinky.sh
 
 bash prepare_data.sh                       # ~19 GB of Dreyer2023, takes a while
@@ -38,7 +38,12 @@ squeue -u $USER
 python run/summarize.py
 ```
 
-`cuda/12.1` is the newest module on this cluster, hence the cu121 wheel.
+The CUDA wheel channel defaults to **cu126** (torch 2.9.1). Do not drop to
+cu121: that index tops out at torch 2.5.1, which is exactly the floor
+`neuralbench` requires. The `cuda/12.1` module on this cluster does not
+constrain the wheel — the wheel bundles its own CUDA runtime, and only the
+driver matters.
+
 `run/eegfm_*.sh` request `--gres=gpu:l4:1`: GPUs are consumable here
 (`GresTypes=gpu`, `select/cons_tres`), so a job that does not ask for one does
 not get one. L4 (c3, c6) is 24 GB; the T4s on c2 are 16 GB and too tight for

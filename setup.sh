@@ -39,7 +39,17 @@ fi
 # torch FIRST, from the CUDA channel, so requirements.txt does not pull the
 # default wheel. torch/torchvision/torchaudio MUST come from the same index —
 # mixing channels fails at import with "operator torchvision::nms does not exist".
-pip install torch torchvision torchaudio --index-url "$TORCH_CHANNEL"
+#
+# --extra-index-url is not optional. --index-url alone *replaces* PyPI, so
+# torch's own dependencies have to resolve against the pytorch index too, and
+# pip >= 26 rejects its typing_extensions wheel over a name-normalisation
+# mismatch ("expected 'typing-extensions', but metadata has
+# 'typing_extensions'"), falls back to the sdist, and then cannot find
+# flit_core to build it. Keeping PyPI in the search path avoids all of that.
+pip install --upgrade pip setuptools wheel
+pip install torch torchvision torchaudio \
+    --index-url "$TORCH_CHANNEL" \
+    --extra-index-url https://pypi.org/simple
 pip install -r "$BENCH_REPO/requirements.txt"
 
 mkdir -p "$HOME/.neuralbench"
