@@ -1,0 +1,6 @@
+work/
+__pycache__/
+*.pyc
+*.parquet
+*.log
+.DS_Store
