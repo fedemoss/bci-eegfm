@@ -151,8 +151,11 @@ contract allows **one file only**, so uploading to Codabench needs the backbone
 inlined into a single `submission.py` (~350 lines) plus ~20 MB of weights in the
 ZIP. Fine for benchmarking; do it before you upload.
 
-## Credits
+## Credits and licensing
 
-CBraMod backbone: [wjq-learning/CBraMod](https://github.com/wjq-learning/CBraMod).
+The vendored backbone (`cbramod/models/`) and the checkpoints in `weights/` come
+from [wjq-learning/CBraMod](https://github.com/wjq-learning/CBraMod), MIT
+licensed, (c) 2025 Jiquan Wang — see `cbramod/models/{LICENSE,NOTICE}`. The only
+change to that code is making one import package-relative.
 NeuroTTT recipe: [arXiv:2509.26301](https://arxiv.org/abs/2509.26301).
 Benchmark: [neural-interfaces26/2026-competition](https://github.com/neural-interfaces26/2026-competition).

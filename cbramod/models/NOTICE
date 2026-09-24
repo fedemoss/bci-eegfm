@@ -1,0 +1,10 @@
+cbramod.py and criss_cross_transformer.py in this directory are vendored
+unmodified from https://github.com/wjq-learning/CBraMod (MIT, (c) 2025 Jiquan
+Wang), except that cbramod.py's import of criss_cross_transformer was made
+package-relative. See LICENSE in this directory.
+
+The checkpoints in ../../weights/ derive from the same project:
+  cbramod_pretrained.pth        - CBraMod's published pretrained backbone
+                                  (https://huggingface.co/weighting666/CBraMod)
+  cbramod_speech_*.pth          - the backbone.* tensors of NeuroTTT models
+                                  fine-tuned on BCIC2020-III imagined speech
