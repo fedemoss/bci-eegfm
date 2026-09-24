@@ -18,8 +18,8 @@
 # prepare_data.sh on a login node first.
 set -euo pipefail
 
-CBRAMOD_HOME="${CBRAMOD_HOME:-$HOME/bci-cbramod}"
-source "$CBRAMOD_HOME/env.sh"
+EEGFM_HOME="${EEGFM_HOME:-$HOME/bci-cbramod}"
+source "$EEGFM_HOME/env.sh"
 
 nvidia-smi || true
-bash "$CBRAMOD_HOME/run/matrix.sh"
+bash "$EEGFM_HOME/run/matrix.sh"

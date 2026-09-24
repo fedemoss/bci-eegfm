@@ -37,18 +37,21 @@ from torch import nn
 from benchmark_utils.base_solver import CompetSolver
 
 # This solver is shipped by the bci-cbramod repo and copied into the benchmark
-# by ``install_solver.sh``; ``CBRAMOD_HOME`` points back at that repo so the
+# by ``install_solver.sh``; ``EEGFM_HOME`` points back at that repo so the
 # vendored backbone stays importable from wherever benchopt loads this file.
-_HOME = Path(os.environ.get("CBRAMOD_HOME", Path(__file__).resolve().parents[3]))
+_HOME = Path(os.environ.get("EEGFM_HOME", Path(__file__).resolve().parents[3]))
 if str(_HOME) not in sys.path:
     sys.path.insert(0, str(_HOME))
 
-from cbramod.core import (  # noqa: E402
-    CBraModNet, tent_loss, tent_setup, ttt_ssl_setup,
+from eegfm.core import (  # noqa: E402
+    FoundationNet, tent_loss, tent_setup, ttt_ssl_setup,
 )
 
-_WEIGHTS = Path(os.environ.get("CBRAMOD_WEIGHTS", _HOME / "weights"))
-_INIT_PATHS = {
+_WEIGHTS = Path(os.environ.get("EEGFM_WEIGHTS", _HOME / "weights"))
+# CBraMod ships its weights in this repo (~20 MB each). REVE does not: its
+# checkpoints are 0.28 GB (base) and 1.56 GB (large), so the backbone pulls
+# them from the Hub on first use and caches them under HF_HOME.
+_CBRAMOD_INIT = {
     # CBraMod's own pretrained backbone (masked EEG reconstruction).
     "pretrained": _WEIGHTS / "cbramod_pretrained.pth",
     # backbone.* of the NeuroTTT imagined-speech model (its 64ch/5-class head
@@ -58,12 +61,14 @@ _INIT_PATHS = {
 }
 
 
-def _resolve_init(name):
-    path = _INIT_PATHS[name]
+def _resolve_init(backbone, name):
+    if not backbone.startswith("cbramod"):
+        return None                       # REVE resolves through the Hub
+    path = _CBRAMOD_INIT[name]
     if not path.exists():
         raise FileNotFoundError(
             f"missing foundation weights: {path}\n"
-            f"Set CBRAMOD_WEIGHTS, or check out the repo's weights/ directory."
+            f"Set EEGFM_WEIGHTS, or check out the repo's weights/ directory."
         )
     return path
 
@@ -152,13 +157,17 @@ class Model:
 
 class Solver(CompetSolver):
 
-    name = "CBraMod"
+    name = "EEGFM"
 
     parameters = {
+        "backbone": ["cbramod"],          # cbramod | reve_base | reve_large
         "arm": ["probe"],                 # probe | finetune | neurottt
-        "init": ["pretrained"],           # pretrained | speech | speech_baseline
-        "head": ["all_patch_reps"],       # all_patch_reps | avgpool
+        "init": ["pretrained"],           # cbramod only: pretrained | speech | speech_baseline
+        "head": ["avgpool"],              # avgpool (linear probe) | all_patch_reps
         "gain": [1.0],                    # input scale (CBraMod trained on uV/100)
+        # "auto" -> zscore+clip15 for REVE (its documented preprocessing),
+        # none for CBraMod (which expects roughly uV/100, i.e. ``gain``).
+        "input_norm": ["auto"],
         # Stage II: none | tent (entropy, norm params, online)
         #                 | ssl  (per-sample SSL calibration, needs arm=neurottt)
         "adapt": ["none"],
@@ -189,12 +198,18 @@ class Solver(CompetSolver):
     # ---- required -------------------------------------------------------
 
     def load_model(self, meta):
-        net = CBraModNet(
+        norm = self.input_norm
+        if norm == "auto":
+            norm = "none" if self.backbone.startswith("cbramod") else "zscore"
+        net = FoundationNet(
+            backbone=self.backbone,
             n_chans=meta["n_chans"], n_times=meta["n_times"],
             n_classes=meta["n_classes"], sfreq=meta["sfreq"],
-            head=self.head, gain=self.gain,
+            head=self.head, gain=self.gain, input_norm=norm,
             with_ssl=(self.arm == "neurottt"),
             ssl_tasks=self.ssl_tasks, task="motor_imagery", n_seg=self.n_seg,
+            weights=_resolve_init(self.backbone, self.init),
+            chs_info=meta.get("chs_info"), device=meta["device"],
         )
         weights = meta["submission_dir"] / "weights.pt"
         # A training run always starts from the foundation weights. Every
@@ -210,11 +225,8 @@ class Solver(CompetSolver):
             except RuntimeError:
                 if os.environ.get("COMPET_SUBMISSION_DIR"):
                     raise      # on the platform a mismatch must never be silent
-                print(f"[CBraMod] incompatible checkpoint {weights} — "
-                      "starting from the foundation weights instead")
-                net.load_backbone(_resolve_init(self.init), meta["device"])
-        else:
-            net.load_backbone(_resolve_init(self.init), meta["device"])
+                print(f"[eegfm] incompatible checkpoint {weights} — "
+                      "keeping the freshly loaded foundation weights")
         return Model(net, meta["device"], adapt=self.adapt,
                      tent_lr=self.tent_lr, tent_steps=self.tent_steps,
                      tent_diversity=self.tent_diversity,
@@ -233,8 +245,9 @@ class Solver(CompetSolver):
         tr_idx, val_idx = _split_by_subject(subj, self.val_frac, self.seed)
         extra = (f" ssl={self.ssl_tasks}(w={self.w_band}/{self.w_task},"
                  f"n_seg={self.n_seg})" if self.arm == "neurottt" else "")
-        print(f"[CBraMod] arm={self.arm} init={self.init} head={self.head} "
-              f"gain={self.gain}{extra} | train {len(tr_idx)} / val {len(val_idx)} "
+        print(f"[eegfm] backbone={self.backbone} arm={self.arm} init={self.init} "
+              f"head={self.head} gain={self.gain}{extra} | "
+              f"train {len(tr_idx)} / val {len(val_idx)} "
               f"windows over {len(np.unique(subj))} subjects")
 
         net = model.net
@@ -285,12 +298,12 @@ def _bal_acc(true, pred):
 
 
 @torch.no_grad()
-def _evaluate(net, X, y, idx, device, batch=64, patched=False):
+def _evaluate(net, X, y, idx, device, batch=64, prepared=False):
     net.eval()
     preds = []
     for i in range(0, len(idx), batch):
         xb = X[idx[i:i + batch]].to(device)
-        preds.append(net(xb, patched=patched).argmax(1).cpu().numpy())
+        preds.append(net(xb, prepared=prepared).argmax(1).cpu().numpy())
     return _bal_acc(y[idx].numpy(), np.concatenate(preds))
 
 
@@ -300,38 +313,44 @@ def _fit_probe(cfg, net, X_all, y_all, tr_idx, val_idx, device):
         p.requires_grad_(False)
     net.backbone.eval()
 
+    # When the head pools over (channel, patch) anyway, cache the pooled
+    # vector instead of every token: REVE-large emits (27, 4, 1216) per window,
+    # which is 6.5 GB over the train split versus 60 MB pooled.
+    pool = cfg.head == "avgpool"
+    pooler = net.classifier[0] if pool else None
+    head = net.classifier[1:] if pool else net.classifier
     feats = []
     with torch.no_grad():
         for i in range(0, len(X_all), cfg.batch_size):
             xb = X_all[i:i + cfg.batch_size].to(device)
-            feats.append(net.features(xb).cpu())
+            f = net.features(xb)
+            feats.append((pooler(f) if pool else f).cpu())
     F_all = torch.cat(feats)
-    print(f"[CBraMod] cached backbone features {tuple(F_all.shape)} "
-          f"({F_all.numel() * 4 / 1e9:.2f} GB)")
+    print(f"[eegfm] cached backbone features {tuple(F_all.shape)} "
+          f"({F_all.numel() * 4 / 1e9:.2f} GB, pooled={pool})")
 
-    opt = torch.optim.AdamW(net.classifier.parameters(), lr=cfg.lr_head,
+    opt = torch.optim.AdamW(head.parameters(), lr=cfg.lr_head,
                             weight_decay=cfg.weight_decay)
     loss_fn = nn.CrossEntropyLoss(label_smoothing=cfg.label_smoothing)
     best, best_state, bad = -np.inf, None, 0
     for epoch in range(cfg.n_epochs):
-        net.classifier.train()
+        head.train()
         perm = torch.randperm(len(tr_idx))
         for i in range(0, len(perm), cfg.batch_size):
             idx = tr_idx[perm[i:i + cfg.batch_size].numpy()]
             opt.zero_grad()
-            loss = loss_fn(net.classifier(F_all[idx].to(device)),
-                           y_all[idx].to(device))
+            loss = loss_fn(head(F_all[idx].to(device)), y_all[idx].to(device))
             loss.backward()
             opt.step()
 
-        net.classifier.eval()
+        head.eval()
         with torch.no_grad():
             pred = torch.cat([
-                net.classifier(F_all[val_idx[i:i + 256]].to(device)).argmax(1).cpu()
+                head(F_all[val_idx[i:i + 256]].to(device)).argmax(1).cpu()
                 for i in range(0, len(val_idx), 256)
             ]).numpy()
         score = _bal_acc(y_all[val_idx].numpy(), pred)
-        print(f"[CBraMod] epoch {epoch + 1:3d}/{cfg.n_epochs} "
+        print(f"[eegfm] epoch {epoch + 1:3d}/{cfg.n_epochs} "
               f"val_bal_acc={score:.4f}")
         best, best_state, bad, stop = _track(score, best, best_state, bad,
                                              net, cfg.patience, epoch)
@@ -367,7 +386,7 @@ def _fit_full(cfg, net, X_all, y_all, tr_idx, val_idx, device, rng, ssl):
             if ssl:
                 # Patch once, augment in patch space, one backbone pass for all
                 # three branches (3x cheaper than three separate passes).
-                xp = net.patch(xb)
+                xp = net.prepare(xb)
                 xp_band, band_lbl, xp_task, task_lbl = net.augment(xp, rng)
                 main, band, task = net.forward_all(xp, xp_band, xp_task)
                 main_loss = loss_fn(main, yb)
@@ -386,7 +405,7 @@ def _fit_full(cfg, net, X_all, y_all, tr_idx, val_idx, device, rng, ssl):
             n_batch += 1
 
         score = _evaluate(net, X_all, y_all, val_idx, device, cfg.batch_size)
-        msg = (f"[CBraMod] epoch {epoch + 1:3d}/{cfg.n_epochs} "
+        msg = (f"[eegfm] epoch {epoch + 1:3d}/{cfg.n_epochs} "
                f"main={tot_main / n_batch:.4f}")
         if ssl:
             msg += f" ssl={tot_ssl / n_batch:.4f}"
@@ -405,7 +424,7 @@ def _track(score, best, best_state, bad, net, patience, epoch):
                 0, False)
     bad += 1
     if bad >= patience:
-        print(f"[CBraMod] early stop at epoch {epoch + 1}")
+        print(f"[eegfm] early stop at epoch {epoch + 1}")
         return best, best_state, bad, True
     return best, best_state, bad, False
 
@@ -413,5 +432,5 @@ def _track(score, best, best_state, bad, net, patience, epoch):
 def _restore(net, best_state, best):
     if best_state is not None:
         net.load_state_dict(best_state)
-    print(f"[CBraMod] best val_bal_acc={best:.4f}  "
+    print(f"[eegfm] best val_bal_acc={best:.4f}  "
           "(grouped by subject — comparable to the test split)")

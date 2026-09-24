@@ -1,6 +1,6 @@
 # bci-cbramod
 
-CBraMod + NeuroTTT arms for **Neural Interfaces 2026, Track 2 (BCI decoding)**,
+EEG foundation models (**CBraMod**, **REVE**) + NeuroTTT arms for **Neural Interfaces 2026, Track 2 (BCI decoding)**,
 evaluated on the warm-up study **Dreyer2023Large** (27 ch, 2-class motor
 imagery, test = Part B subjects 61–81).
 
@@ -31,7 +31,7 @@ source env.sh && bash prepare_data.sh
 bash run/smoke.sh
 
 # 4. the real thing
-sbatch run/cbramod.sbatch                   # or: bash run/matrix.sh
+sbatch run/eegfm.sbatch                   # or: bash run/matrix.sh
 python run/summarize.py
 ```
 
@@ -52,8 +52,38 @@ physically live there.
 
 ## What gets run
 
-Three training arms × two backbone initialisations, each scored with and
-without test-time adaptation.
+Two backbones × three training arms, each scored under three adaptation modes.
+
+### Backbones
+
+| `backbone=` | params | embed | weights | notes |
+|---|---|---|---|---|
+| `cbramod` | 4.9M | 200 | in `weights/` (~20 MB) | criss-cross transformer, non-overlapping 1 s patches |
+| `reve_base` | 69M | 512 | Hub, 0.28 GB | 4D (x,y,z,t) Fourier positional encoding |
+| `reve_large` | 400M | 1216 | Hub, 1.56 GB | same, 19 heads |
+
+REVE weights are **not vendored** — `REVE.from_pretrained` pulls them on first
+use and caches them under `HF_HOME` (set to `$WORK/hf` by `env.sh`). Compute
+nodes usually have no network, so warm the cache once on a login node:
+
+```bash
+source env.sh && python -m eegfm.smoke_test reve_large   # then jobs can use HF_HUB_OFFLINE=1
+```
+
+REVE's positional encoding takes real electrode coordinates, so it maps
+Dreyer's 27 channel names to (x, y, z) with no retraining — and it is the one
+backbone here explicitly built to be used **frozen**: "Under linear probing
+(frozen encoder), REVE achieves state-of-the-art results." That makes
+`arm=probe` a real contender for REVE, unlike for CBraMod, whose own paper
+warns that "fixing the pre-trained parameters during training on downstream
+datasets will lead to a very large performance decline."
+
+Both models were pretrained at **200 Hz**, so `prepare_input` resamples Dreyer
+120 -> 200 Hz for both. REVE additionally documents per-channel z-scoring with
+clipping at 15 SD; `input_norm=auto` applies that for REVE and leaves CBraMod
+on the raw (`gain`-scaled) signal it expects.
+
+### Arms
 
 | `arm=` | what trains | cost/epoch (laptop CPU; GPU is 1–2 orders faster) |
 |---|---|---|
@@ -95,14 +125,24 @@ runs on `arm=neurottt`. It follows Table 7 (steps 1, batch size 1, lr 1e-5,
 cost knob, since the reset means the work does not amortise across a batch.
 `ttt_online=True` carries state forward instead of resetting.
 
-CBraMod has **no BatchNorm** — the paper describes Tent as updating BN
-statistics, so here it adapts the 24 LayerNorm affines (9,600 of 4.99M
-parameters, 0.19%).
+The paper describes Tent as updating BatchNorm statistics, but neither backbone
+has any BatchNorm: CBraMod is LayerNorm (+ a few GroupNorms) and REVE mixes
+LayerNorm with **RMSNorm**. `norm_affine_params` therefore matches any module
+whose class name contains "Norm" — matching `nn.LayerNorm` alone would have
+silently left two-thirds of REVE's norms frozen. Adapted: 9,750 params for
+CBraMod, 24,576 for reve-base.
+
+`init=` selects which **CBraMod** checkpoint to start from and is ignored for REVE:
 
 | `init=` | backbone weights |
 |---|---|
 | `pretrained` | CBraMod's own pretrained backbone (masked EEG reconstruction) |
 | `speech` | `backbone.*` of the NeuroTTT imagined-speech model — tests cross-task transfer |
+
+`head=avgpool` (the default) means over channels and patches then applies a
+single `Linear(embed_dim, n_classes)` — a true linear probe, and what makes
+caching REVE-large features affordable (60 MB pooled vs 6.5 GB of raw tokens).
+`head=all_patch_reps` is CBraMod's own flatten-everything head.
 
 `tent_diversity=1.0` adds a marginal-entropy term — plain Tent can collapse to a
 single class, which *balanced* accuracy punishes far harder than plain accuracy
@@ -128,8 +168,9 @@ on the test column.
 ### Knobs
 
 ```bash
-ARMS="probe finetune neurottt"   INITS="pretrained speech"
-GAIN=1.0  EPOCHS=20  TENT_DIV=1.0
+BACKBONES="cbramod reve_large"   ARMS="probe finetune neurottt"
+INITS="pretrained speech"        HEAD=avgpool
+GAIN=1.0  EPOCHS=20  TENT_DIV=1.0  TTT_CHUNK=1
 DATASET="BCI[study=dreyer2023,num_workers=4]"
 ```
 
@@ -144,16 +185,17 @@ env.sh              paths + conda activation — source this first
 setup.sh            one-time: conda env, clone the benchmark, install the solver
 prepare_data.sh     stage Dreyer2023 (~19 GB, login node)
 install_solver.sh   copy solvers/cbramod.py into the benchmark (re-run after git pull)
-cbramod/
-  models/           vendored CBraMod backbone (from wjq-learning/CBraMod)
-  core.py           patching, SSL augmentations, Tent
-  smoke_test.py     loads the weights + benchmarks this machine
-solvers/cbramod.py  the benchopt solver — all arms live here
+eegfm/
+  cbramod/          vendored CBraMod backbone (from wjq-learning/CBraMod)
+  backbones.py      CBraMod / REVE behind one encode() interface
+  core.py           input adaptation, SSL augmentations, heads, Tent + TTT
+  smoke_test.py     loads a backbone and benchmarks this machine
+solvers/eegfm.py    the benchopt solver — all arms, both backbones live here
 weights/            three backbone checkpoints, ~20 MB each
 run/
   smoke.sh          5-minute plumbing check
   matrix.sh         the experiment matrix
-  cbramod.sbatch    slurm wrapper
+  eegfm.sbatch      slurm wrapper
   summarize.py      joins grouped-val (from logs) with test (from parquet)
 notes/FINDINGS.md   what was measured before this repo existed — read this
 work/               gitignored: benchmark clone, data, caches, results, logs
@@ -182,7 +224,7 @@ arm's weights.
 
 ## Not submission-ready
 
-`solvers/cbramod.py` imports from the `cbramod/` package. The competition
+`solvers/eegfm.py` imports from the `eegfm/` package. The competition
 contract allows **one file only**, so uploading to Codabench needs the backbone
 inlined into a single `submission.py` (~350 lines) plus ~20 MB of weights in the
 ZIP. Fine for benchmarking; do it before you upload.
@@ -194,4 +236,6 @@ from [wjq-learning/CBraMod](https://github.com/wjq-learning/CBraMod), MIT
 licensed, (c) 2025 Jiquan Wang — see `cbramod/models/{LICENSE,NOTICE}`. The only
 change to that code is making one import package-relative.
 NeuroTTT recipe: [arXiv:2509.26301](https://arxiv.org/abs/2509.26301).
+REVE: [brain-bzh/reve](https://huggingface.co/collections/brain-bzh/reve),
+loaded through braindecode's `REVE` implementation.
 Benchmark: [neural-interfaces26/2026-competition](https://github.com/neural-interfaces26/2026-competition).

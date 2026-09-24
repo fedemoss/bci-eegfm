@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-HOME = Path(os.environ.get("CBRAMOD_HOME", Path(__file__).resolve().parents[1]))
+HOME = Path(os.environ.get("EEGFM_HOME", Path(__file__).resolve().parents[1]))
 WORK = Path(os.environ.get("WORK", HOME / "work"))
 OUTPUTS = WORK / "2026-competition/tracks/bci_decoding/outputs"
 LOGS = WORK / "logs/cbramod"
@@ -45,7 +45,7 @@ def parse_parquet():
         df = pd.read_parquet(f)
         for _, r in df.iterrows():
             name = str(r["solver_name"])
-            if not name.startswith("CBraMod"):
+            if not name.startswith("EEGFM"):
                 continue
             p = dict(_PARAM.findall(name))
             rows.append({

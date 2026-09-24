@@ -6,8 +6,8 @@
 # Check the node's driver with `nvidia-smi` first and pick the matching channel.
 set -euo pipefail
 
-CBRAMOD_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK="${WORK:-$CBRAMOD_HOME/work}"
+EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK="${WORK:-$EEGFM_HOME/work}"
 TORCH_CHANNEL="${TORCH_CHANNEL:-https://download.pytorch.org/whl/cu126}"
 BENCH_REPO="$WORK/2026-competition"
 
@@ -52,7 +52,7 @@ cat > "$HOME/.neuralbench/config.json" <<EOF
 }
 EOF
 
-bash "$CBRAMOD_HOME/install_solver.sh"
+bash "$EEGFM_HOME/install_solver.sh"
 
 python - <<'PY'
 import torch

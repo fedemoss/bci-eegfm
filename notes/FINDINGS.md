@@ -128,3 +128,29 @@ CBraMod was pretrained on uV/100 (`bciciv2a_dataset.py` returns `data/100`)
 while Dreyer arrives RobustScaler'd (std 0.71, range [-8.9, 4.1]). Close, but
 not identical — hence `gain=` is a swept input scale, and stage 0 of the matrix
 exists to pin it down on the cheap frozen-backbone arm.
+
+## REVE, checked 2026-09-24
+
+- `brain-bzh/reve-base` (69M params, embed 512) and `brain-bzh/reve-large`
+  (400M, embed 1216, 19 heads, depth 22) are on the Hub and, despite what
+  braindecode's docstring says, **not gated** — anonymous download returns 200.
+  1.56 GB for large, 0.28 GB for base, so neither is vendored here.
+- `REVE.from_pretrained(repo, n_outputs, n_chans, n_times, sfreq, chs_info)`
+  works, and `forward(x, return_features=True)["features"]` gives
+  `(B, C, S, D)`. All 27 Dreyer channel names resolve in the position bank to
+  `(27, 3)` coordinates.
+- Patching is `patch_size=200, patch_overlap=20` (stride 180), so an 800-sample
+  window yields 4 patches — the same count as CBraMod, by coincidence.
+- **The position bank downloads `positions.json` from the Hub at model
+  construction**, not just the weights. Warm `HF_HOME` on a login node.
+- Measured on the laptop CPU: reve-base **51 ms/window** forward, ~8x CBraMod's
+  6.4 ms. reve-large is ~5.8x the parameters again, so budget ~300 ms/window on
+  CPU (~25 min for one Dreyer test pass) — fine on a GPU, painful without one.
+- REVE is the one backbone here designed to be used frozen ("Under linear
+  probing (frozen encoder), REVE achieves state-of-the-art results"), which is
+  the opposite of CBraMod's own warning that freezing causes "a very large
+  performance decline". So `arm=probe` is a genuine contender for REVE and a
+  diagnostic floor for CBraMod — the comparison is the interesting part.
+- Norm layers differ: CBraMod is LayerNorm + GroupNorm (9,750 affine params),
+  REVE is RMSNorm + LayerNorm (24,576 for base). Tent matches on any module
+  whose class name contains "Norm" so neither backbone is silently half-frozen.

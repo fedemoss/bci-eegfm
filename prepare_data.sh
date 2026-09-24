@@ -2,8 +2,8 @@
 # Stage Dreyer2023Large (~19 GB). Needs network -> LOGIN NODE, not a compute node.
 # Idempotent: downloads, then runs the extraction once so later runs hit warm caches.
 set -euo pipefail
-CBRAMOD_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$CBRAMOD_HOME/env.sh"
+EEGFM_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$EEGFM_HOME/env.sh"
 
 echo "Staging Dreyer2023 into $BENCHOPT_DATA_HOME (this takes a while)..."
 benchopt prepare "$BENCH" -d "BCI[study=dreyer2023]"
