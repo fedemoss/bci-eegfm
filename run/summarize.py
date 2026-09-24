@@ -51,7 +51,8 @@ def parse_parquet():
             rows.append({
                 "arm": p.get("arm"), "init": p.get("init"),
                 "head": p.get("head"), "gain": p.get("gain"),
-                "tent": p.get("tent"), "tent_div": p.get("tent_diversity"),
+                "adapt": p.get("adapt"), "tent_div": p.get("tent_diversity"),
+                "ssl": p.get("ssl_tasks"),
                 "test_bal_acc": r["objective_balanced_accuracy"],
                 "time_s": round(r["time"]),
                 "run": os.path.basename(f),
@@ -69,9 +70,10 @@ def main():
         val.get((r.arm, r.init, r.head, r.gain)) for r in df.itertuples()
     ]
     df = df.drop_duplicates(
-        subset=["arm", "init", "head", "gain", "tent", "tent_div"], keep="last"
+        subset=["arm", "init", "head", "gain", "adapt", "tent_div", "ssl"],
+        keep="last"
     ).sort_values("test_bal_acc", ascending=False)
-    cols = ["arm", "init", "head", "gain", "tent", "tent_div",
+    cols = ["arm", "init", "head", "gain", "ssl", "adapt", "tent_div",
             "val_bal_acc", "test_bal_acc", "time_s"]
     print(df[cols].to_string(index=False, na_rep="-"))
     print("\nReference on the same split: EEGNet 0.7651, MyModel 0.7794, chance 0.50")

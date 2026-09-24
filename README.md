@@ -57,24 +57,60 @@ without test-time adaptation.
 
 | `arm=` | what trains | cost/epoch (laptop CPU; GPU is 1–2 orders faster) |
 |---|---|---|
-| `probe` | frozen backbone, head only — backbone features cached once | seconds |
-| `finetune` | backbone + head, plain CE. NeuroTTT's *Full Supervised Finetuning* row | ~6.5 min |
-| `neurottt` | stage I: `L = L_main + 0.1·(L_stopband + L_amplitude)` | ~20 min |
+| `probe` | frozen backbone, head only — features cached once | seconds |
+| `finetune` | backbone + head, plain CE — the paper's *Full Supervised Finetuning* | ~6.5 min |
+| `neurottt` | stage I: `L = L_main + Σⱼ wⱼ·L_ssl⁽ʲ⁾` | ~20 min |
+
+Note the paper keeps the backbone **fully trainable in every setting** (§4.1) and
+reports LoRA — which freezes it — as the *worst* strategy on motor imagery
+(0.4164 vs 0.5028 for a full fine-tune). `probe` freezes it completely, so treat
+it as a diagnostic floor ("what is already in the representation"), not a
+contender.
+
+### Stage I SSL: the pair is task-specific
+
+Appendix A.1. Stopped-Band Prediction is shared by all three NeuroTTT tasks;
+the second head is chosen per task, and **motor imagery gets Temporal Jigsaw**:
+
+| `ssl_tasks=` | heads | for |
+|---|---|---|
+| `band+jigsaw` *(default)* | stopped-band (4-way) + temporal jigsaw (`n_seg!`-way) | motor imagery — the paper's MI pair |
+| `band+amp` | stopped-band + amplitude scaling (16-way) | imagined speech — what the reference notebook ships |
+
+MI band divisions are the paper's Table 6 (θ 3–7, μ 8–13, β 13–30, low-γ 30–45),
+and the loss weights default to Table 7's motor-imagery row: `w_band=0.1`,
+`w_task=0.8` — the jigsaw term dominates.
+
+### Stage II: two adaptation modes, not one
+
+| `adapt=` | what it does | cost |
+|---|---|---|
+| `none` | frozen weights at test time | — |
+| `tent` | entropy minimisation on the normalisation affines, online across batches | ~1 extra fwd+bwd per batch |
+| `ssl` | **per-sample calibration**: one full-parameter Adam step (lr 1e-5) on the SSL loss for each unlabeled test sample, predict, then **reset** before the next one | ~2 fwd + 1 bwd *per sample* |
+
+`adapt=ssl` is the paper's "TTT with SSL" and needs the SSL heads, so it only
+runs on `arm=neurottt`. It follows Table 7 (steps 1, batch size 1, lr 1e-5,
+`online=False`); `ttt_chunk` relaxes the batch size of 1 and is the dominant
+cost knob, since the reset means the work does not amortise across a batch.
+`ttt_online=True` carries state forward instead of resetting.
+
+CBraMod has **no BatchNorm** — the paper describes Tent as updating BN
+statistics, so here it adapts the 24 LayerNorm affines (9,600 of 4.99M
+parameters, 0.19%).
 
 | `init=` | backbone weights |
 |---|---|
 | `pretrained` | CBraMod's own pretrained backbone (masked EEG reconstruction) |
 | `speech` | `backbone.*` of the NeuroTTT imagined-speech model — tests cross-task transfer |
 
-`tent=True` adds **stage II** on top of any arm: entropy minimisation on the
-LayerNorm affine parameters, online over the (unshuffled) test stream, no labels.
 `tent_diversity=1.0` adds a marginal-entropy term — plain Tent can collapse to a
 single class, which *balanced* accuracy punishes far harder than plain accuracy
 would, so the matrix reports both.
 
 `run/matrix.sh` trains each arm into its own `COMPET_SUBMISSION_DIR`, then
-re-scores it inference-only with each Tent variant. The no-Tent number comes
-from the training run itself.
+re-scores it inference-only under each adaptation mode. The unadapted number
+comes from the training run itself.
 
 ### Stage 0: the input gain
 

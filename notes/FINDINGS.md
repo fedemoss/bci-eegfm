@@ -31,6 +31,44 @@ model: Stage I is a supervised + SSL fine-tuning stage by construction
 (`L_main` needs labels). Only Stage II (Tent) is training-free, and it applies
 on top of any arm — including the frozen-backbone probe.
 
+## What the paper actually prescribes (read before changing the SSL code)
+
+From the PDF (arXiv:2509.26301v2), §3.1, §3.2, §4.1 and Appendix A.1/B.4:
+
+- **Stage I SSL is a *pair* of heads, and the second one is task-specific.**
+  Stopped-Band Prediction is shared; imagined speech adds Amplitude Scaling,
+  mental stress adds Anterior–Posterior Flip, and **motor imagery adds Temporal
+  Jigsaw** (split the trial into 2–3 consecutive chunks, shuffle, predict the
+  order). Band divisions differ per task too — MI is Table 6: theta 3–7,
+  mu 8–13, beta 13–30, low gamma 30–45.
+- **Loss weights differ per task** (Table 7). Motor imagery is
+  `w_band = 0.1`, `w_jigsaw = 0.8` — the jigsaw term dominates. The reference
+  notebook's 0.1/0.1 is the mental-stress row; imagined speech is 0.6/0.6.
+- **Stage II has two variants**, and Tent is only one of them:
+  (a) *TTT with SSL* — one full-parameter Adam step (lr 1e-5) on the SSL loss
+  per unlabeled test sample, batch size 1, then the model is **reset to its
+  original weights before the next sample** (`online=False`). This is the
+  per-sample/subject calibration.
+  (b) *TTT with Tent* — entropy minimisation, normalisation parameters only,
+  several updates per batch, online.
+- **The backbone is never frozen.** §4.1: "In all of our finetuning and
+  adaptation settings, the foundation model remains fully trainable." LoRA,
+  which does freeze it, is the *worst* method on MI (0.4164). The paper's
+  explanation: "the frozen backbone's representations remain largely
+  unchanged ... a small low-rank tweak may be insufficient to bridge the gap."
+  So this repo's `probe` arm is a diagnostic floor, not a contender.
+- **MI protocol**: BCIC-IV-2a cross-subject, subjects 1–5 train / 6–7 val /
+  8–9 test; 22 ch, 250 Hz resampled to 200 Hz; Adam lr 1e-4; converges within
+  20 epochs. Both backbones "internally downsample input signals to 200 Hz",
+  which is why this repo resamples Dreyer 120 -> 200 Hz.
+- **CBraMod has no BatchNorm.** The paper writes Tent as updating BN
+  statistics; CBraMod is LayerNorm throughout, so Tent adapts 24 LayerNorm
+  affines = 9,600 of 4.99M params (0.19%).
+
+Paper Table 3 (BCIC-IV-2a), CBraMod column, for reference:
+Linear 0.5028 | Shallow MLP 0.4578 | LoRA 0.4164 | SHOT 0.5354 |
+TTT w/ SSL 0.5435 | TTT w/ Tent 0.5674.
+
 ## Published numbers for context
 
 NeuroTTT (arXiv:2509.26301) benchmarks motor imagery on BCI Competition IV-2a —

@@ -44,8 +44,7 @@ if str(_HOME) not in sys.path:
     sys.path.insert(0, str(_HOME))
 
 from cbramod.core import (  # noqa: E402
-    CBraModNet, augment_amplitude_scale, augment_stopped_band, tent_loss,
-    tent_setup,
+    CBraModNet, tent_loss, tent_setup, ttt_ssl_setup,
 )
 
 _WEIGHTS = Path(os.environ.get("CBRAMOD_WEIGHTS", _HOME / "weights"))
@@ -72,33 +71,83 @@ def _resolve_init(name):
 class Model:
     """Competition wrapper: ``predict(X) -> (B,)``, optionally Tent-adapted."""
 
-    def __init__(self, net, device, tent=False, tent_lr=1e-3, tent_steps=1,
-                 tent_diversity=0.0):
+    def __init__(self, net, device, adapt="none", tent_lr=1e-3, tent_steps=1,
+                 tent_diversity=0.0, ttt_lr=1e-5, ttt_steps=1, ttt_chunk=1,
+                 ttt_online=False, w_band=0.1, w_task=0.8, seed=8888):
         self.net = net.to(device)
         self.device = device
-        self.tent = tent
+        self.adapt = adapt
         self.tent_lr, self.tent_steps = tent_lr, tent_steps
         self.tent_diversity = tent_diversity
-        self._tent_opt = None
+        self.ttt_lr, self.ttt_steps = ttt_lr, ttt_steps
+        self.ttt_chunk, self.ttt_online = ttt_chunk, ttt_online
+        self.w_band, self.w_task = w_band, w_task
+        self._opt = None
+        self._snapshot = None
+        self._rng = random.Random(seed)
 
     def predict(self, X):
         X = torch.as_tensor(X, dtype=torch.float32).to(self.device)
-        if not self.tent:
+        if self.adapt == "none":
             self.net.eval()
             with torch.inference_mode():
                 return self.net(X).argmax(dim=1)
+        if self.adapt == "tent":
+            return self._predict_tent(X)
+        if self.adapt == "ssl":
+            return self._predict_ttt_ssl(X)
+        raise ValueError(f"unknown adapt={self.adapt!r}")
 
-        # Stage II: adapt on this batch, then predict. State carries across
-        # batches (online), which is why the test loader must stay unshuffled.
-        if self._tent_opt is None:
-            self._tent_opt, _ = tent_setup(self.net, lr=self.tent_lr)
+    def _predict_tent(self, X):
+        """Stage II-b — entropy minimisation on the normalisation affines.
+
+        State carries across batches (online), which is why the test loader
+        must stay unshuffled: consecutive batches then walk through one
+        recording rather than a random mixture.
+        """
+        if self._opt is None:
+            self._opt, _ = tent_setup(self.net, lr=self.tent_lr)
         for _ in range(self.tent_steps):
-            self._tent_opt.zero_grad()
-            loss = tent_loss(self.net(X), diversity=self.tent_diversity)
-            loss.backward()
-            self._tent_opt.step()
+            self._opt.zero_grad()
+            tent_loss(self.net(X), diversity=self.tent_diversity).backward()
+            self._opt.step()
         with torch.no_grad():
             return self.net(X).argmax(dim=1)
+
+    def _predict_ttt_ssl(self, X):
+        """Stage II-a — per-sample self-supervised calibration.
+
+        The paper takes one full-parameter Adam step (lr 1e-5) on the SSL loss
+        for each unlabeled test sample, predicts, then *resets* the weights
+        before the next one (Table 7: batch size 1, online False). So each
+        sample is personalised independently — no state leaks between trials.
+
+        ``ttt_chunk`` relaxes the batch size of 1: it is the single biggest
+        cost knob here, since the reset means the work does not amortise.
+        """
+        if self.net.ssl_band is None:
+            raise RuntimeError(
+                "adapt='ssl' needs the SSL heads — they only exist on the "
+                "'neurottt' arm. Use adapt='tent' for the other arms."
+            )
+        if self._opt is None:
+            self._opt, self._snapshot = ttt_ssl_setup(self.net, lr=self.ttt_lr)
+
+        preds = []
+        for i in range(0, len(X), self.ttt_chunk):
+            xb = X[i:i + self.ttt_chunk]
+            self.net.train()
+            for _ in range(self.ttt_steps):
+                self._opt.zero_grad()
+                self.net.ssl_loss(xb, self.w_band, self.w_task,
+                                  rng=self._rng).backward()
+                self._opt.step()
+            self.net.eval()
+            with torch.no_grad():
+                preds.append(self.net(xb).argmax(dim=1))
+            if not self.ttt_online:
+                self.net.load_state_dict(self._snapshot)
+        return torch.cat(preds)
 
 
 class Solver(CompetSolver):
@@ -110,16 +159,27 @@ class Solver(CompetSolver):
         "init": ["pretrained"],           # pretrained | speech | speech_baseline
         "head": ["all_patch_reps"],       # all_patch_reps | avgpool
         "gain": [1.0],                    # input scale (CBraMod trained on uV/100)
-        "tent": [False],
+        # Stage II: none | tent (entropy, norm params, online)
+        #                 | ssl  (per-sample SSL calibration, needs arm=neurottt)
+        "adapt": ["none"],
         "tent_lr": [1e-3],
         "tent_steps": [1],
         "tent_diversity": [0.0],
+        "ttt_lr": [1e-5],                 # paper Table 7
+        "ttt_steps": [1],
+        "ttt_chunk": [1],                 # paper uses batch size 1
+        "ttt_online": [False],            # paper resets between samples
+        # Stage I SSL: band+jigsaw is the paper's motor-imagery pair;
+        # band+amp is the imagined-speech pair the reference notebook ships.
+        "ssl_tasks": ["band+jigsaw"],
+        "n_seg": [2],                     # jigsaw chunks (must divide n_patch)
+        "w_band": [0.1],                  # paper Table 7, motor imagery
+        "w_task": [0.8],
         "n_epochs": [20],
         "lr_backbone": [1e-4],
         "lr_head": [5e-4],
         "weight_decay": [5e-2],
         "label_smoothing": [0.1],
-        "ssl_weight": [0.1],
         "batch_size": [64],
         "val_frac": [0.2],
         "patience": [5],
@@ -134,6 +194,7 @@ class Solver(CompetSolver):
             n_classes=meta["n_classes"], sfreq=meta["sfreq"],
             head=self.head, gain=self.gain,
             with_ssl=(self.arm == "neurottt"),
+            ssl_tasks=self.ssl_tasks, task="motor_imagery", n_seg=self.n_seg,
         )
         weights = meta["submission_dir"] / "weights.pt"
         # A training run always starts from the foundation weights. Every
@@ -154,9 +215,12 @@ class Solver(CompetSolver):
                 net.load_backbone(_resolve_init(self.init), meta["device"])
         else:
             net.load_backbone(_resolve_init(self.init), meta["device"])
-        return Model(net, meta["device"], tent=self.tent, tent_lr=self.tent_lr,
-                     tent_steps=self.tent_steps,
-                     tent_diversity=self.tent_diversity)
+        return Model(net, meta["device"], adapt=self.adapt,
+                     tent_lr=self.tent_lr, tent_steps=self.tent_steps,
+                     tent_diversity=self.tent_diversity,
+                     ttt_lr=self.ttt_lr, ttt_steps=self.ttt_steps,
+                     ttt_chunk=self.ttt_chunk, ttt_online=self.ttt_online,
+                     w_band=self.w_band, w_task=self.w_task, seed=self.seed)
 
     # ---- local training only --------------------------------------------
 
@@ -167,8 +231,10 @@ class Solver(CompetSolver):
 
         X_all, y_all, subj = _materialise(train_loader)
         tr_idx, val_idx = _split_by_subject(subj, self.val_frac, self.seed)
+        extra = (f" ssl={self.ssl_tasks}(w={self.w_band}/{self.w_task},"
+                 f"n_seg={self.n_seg})" if self.arm == "neurottt" else "")
         print(f"[CBraMod] arm={self.arm} init={self.init} head={self.head} "
-              f"gain={self.gain} | train {len(tr_idx)} / val {len(val_idx)} "
+              f"gain={self.gain}{extra} | train {len(tr_idx)} / val {len(val_idx)} "
               f"windows over {len(np.unique(subj))} subjects")
 
         net = model.net
@@ -302,12 +368,14 @@ def _fit_full(cfg, net, X_all, y_all, tr_idx, val_idx, device, rng, ssl):
                 # Patch once, augment in patch space, one backbone pass for all
                 # three branches (3x cheaper than three separate passes).
                 xp = net.patch(xb)
-                xp_band, band_lbl = augment_stopped_band(xp, rng)
-                xp_amp, amp_lbl = augment_amplitude_scale(xp, rng)
-                main, band, amp = net.forward_all(xp, xp_band, xp_amp)
+                xp_band, band_lbl, xp_task, task_lbl = net.augment(xp, rng)
+                main, band, task = net.forward_all(xp, xp_band, xp_task)
                 main_loss = loss_fn(main, yb)
-                s_loss = ssl_fn(band, band_lbl) + ssl_fn(amp, amp_lbl)
-                loss = main_loss + cfg.ssl_weight * s_loss
+                # Weighted per task, not one shared weight: the paper gives
+                # motor imagery w_band=0.1, w_jigsaw=0.8 (Table 7).
+                s_loss = (cfg.w_band * ssl_fn(band, band_lbl)
+                          + cfg.w_task * ssl_fn(task, task_lbl))
+                loss = main_loss + s_loss
                 tot_ssl += s_loss.item()
             else:
                 main_loss = loss = loss_fn(net(xb), yb)

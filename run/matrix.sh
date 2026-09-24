@@ -22,6 +22,7 @@ ARMS="${ARMS-probe finetune neurottt}"
 INITS="${INITS-pretrained speech}"
 GAIN_SWEEP="${GAIN_SWEEP:-0}"
 TENT_DIV="${TENT_DIV:-1.0}"
+TTT_CHUNK="${TTT_CHUNK:-1}"    # paper: 1 sample per adaptation step
 
 OUT="$WORK/results/cbramod"
 LOGS="$WORK/logs/cbramod"
@@ -56,15 +57,25 @@ for arm in $ARMS; do
         -o "BCI-decoding[training=True]" 2>&1 | tee "$LOGS/${tag}_train.log"
 
     # Inference-only: reloads the weights just written, no retraining.
-    echo "=== ${tag}: + Tent (plain) ==="
+    echo "=== ${tag}: + Tent (stage II-b) ==="
     benchopt run "$BENCH" -d "$DATASET" --no-plot \
-        -s "CBraMod[arm=$arm,init=$init,gain=$GAIN,tent=True]" \
+        -s "CBraMod[arm=$arm,init=$init,gain=$GAIN,adapt=tent]" \
         2>&1 | tee "$LOGS/${tag}_tent.log"
 
     echo "=== ${tag}: + Tent + diversity ($TENT_DIV) ==="
     benchopt run "$BENCH" -d "$DATASET" --no-plot \
-        -s "CBraMod[arm=$arm,init=$init,gain=$GAIN,tent=True,tent_diversity=$TENT_DIV]" \
+        -s "CBraMod[arm=$arm,init=$init,gain=$GAIN,adapt=tent,tent_diversity=$TENT_DIV]" \
         2>&1 | tee "$LOGS/${tag}_tentdiv.log"
+
+    # Stage II-a needs the SSL heads, so it only exists on the neurottt arm.
+    # ttt_chunk=1 is the paper's setting (one sample, then reset); raise it if
+    # the full pass is too slow -- it is the dominant cost of this arm.
+    if [ "$arm" = "neurottt" ]; then
+        echo "=== ${tag}: + TTT with SSL (stage II-a, chunk=$TTT_CHUNK) ==="
+        benchopt run "$BENCH" -d "$DATASET" --no-plot \
+            -s "CBraMod[arm=$arm,init=$init,gain=$GAIN,adapt=ssl,ttt_chunk=$TTT_CHUNK]" \
+            2>&1 | tee "$LOGS/${tag}_tttssl.log"
+    fi
 
     unset COMPET_SUBMISSION_DIR
   done

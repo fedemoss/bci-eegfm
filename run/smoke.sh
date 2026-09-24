@@ -13,7 +13,8 @@ benchopt run "$BENCH" -d "BCI[study=tangermann2012]" --no-plot \
     -s "CBraMod[arm=probe,n_epochs=2]" \
     -s "CBraMod[arm=finetune,n_epochs=2]" \
     -s "CBraMod[arm=neurottt,n_epochs=2]" \
-    -s "CBraMod[arm=probe,n_epochs=2,tent=True]" \
+    -s "CBraMod[arm=probe,n_epochs=2,adapt=tent]" \
+    -s "CBraMod[arm=neurottt,n_epochs=2,adapt=ssl,ttt_chunk=32]" \
     -o "BCI-decoding[training=True]"
 echo
-echo "If all four solvers reported 'done', the plumbing is good."
+echo "If all five solvers reported 'done', the plumbing is good."
