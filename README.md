@@ -35,7 +35,7 @@ sbatch run/eegfm.sbatch                   # or: bash run/matrix.sh
 python run/summarize.py
 ```
 
-Edit `--partition` / `--account` in `run/cbramod.sbatch` before submitting.
+Edit `--partition` / `--account` in `run/eegfm.sbatch` before submitting.
 
 **Put the data on scratch.** `WORK` defaults to `./work` inside the repo; set it
 to a scratch filesystem instead, and keep it exported everywhere:
@@ -52,7 +52,9 @@ physically live there.
 
 ## What gets run
 
-Two backbones × three training arms, each scored under three adaptation modes.
+Three backbones are available; `run/matrix.sh` defaults to
+`BACKBONES="cbramod reve_large"`. Each backbone runs three training arms, and
+each trained arm is then re-scored under every applicable adaptation mode.
 
 ### Backbones
 
@@ -91,11 +93,14 @@ on the raw (`gain`-scaled) signal it expects.
 | `finetune` | backbone + head, plain CE — the paper's *Full Supervised Finetuning* | ~6.5 min |
 | `neurottt` | stage I: `L = L_main + Σⱼ wⱼ·L_ssl⁽ʲ⁾` | ~20 min |
 
-Note the paper keeps the backbone **fully trainable in every setting** (§4.1) and
-reports LoRA — which freezes it — as the *worst* strategy on motor imagery
-(0.4164 vs 0.5028 for a full fine-tune). `probe` freezes it completely, so treat
-it as a diagnostic floor ("what is already in the representation"), not a
-contender.
+**`probe` means something different for each backbone**, which is the whole
+reason it is worth running. The NeuroTTT paper keeps the backbone fully
+trainable in every setting (§4.1) and reports LoRA — which freezes it — as its
+*worst* strategy on motor imagery (0.4164 vs 0.5028 for a full fine-tune); that
+evidence is about CBraMod and LaBraM, whose positional encodings do not
+transfer. REVE was built for the opposite regime and claims state-of-the-art
+*under* linear probing. So read `probe` as a diagnostic floor for CBraMod and as
+a genuine contender for REVE — and the gap between them as the result.
 
 ### Stage I SSL: the pair is task-specific
 
@@ -178,20 +183,47 @@ All are environment variables read by `run/matrix.sh`.
 
 ---
 
+## Results
+
+**Nothing has been run on Dreyer2023 yet.** The numbers below are the reference
+points to beat; fill in the rest from `python run/summarize.py`.
+
+| backbone | arm | head | adapt | grouped-val | test bal-acc |
+|---|---|---|---|---|---|
+| — (EEGNet, 2,420 params) | — | — | — | — | **0.7651** |
+| — (MyModel) | — | — | — | — | **0.7794** |
+| cbramod | probe | avgpool | none | | |
+| cbramod | finetune | avgpool | none | | |
+| cbramod | neurottt | avgpool | none | | |
+| cbramod | neurottt | avgpool | tent | | |
+| cbramod | neurottt | avgpool | ssl | | |
+| reve_large | probe | avgpool | none | | |
+| reve_large | finetune | avgpool | none | | |
+| reve_large | neurottt | avgpool | none | | |
+| reve_large | neurottt | avgpool | tent | | |
+| reve_large | neurottt | avgpool | ssl | | |
+
+Published context, on BCIC-IV-2a rather than Dreyer so not directly comparable:
+NeuroTTT reports CBraMod at 0.5028 (full fine-tune) -> 0.5674 (+Tent), while a
+plain EEGNet scores 0.5825 on that dataset. Expect the foundation arms to start
+*behind* EEGNet; whether adaptation closes the gap is the question.
+
+---
+
 ## Layout
 
 ```
 env.sh              paths + conda activation — source this first
 setup.sh            one-time: conda env, clone the benchmark, install the solver
 prepare_data.sh     stage Dreyer2023 (~19 GB, login node)
-install_solver.sh   copy solvers/cbramod.py into the benchmark (re-run after git pull)
+install_solver.sh   copy solvers/eegfm.py into the benchmark (re-run after git pull)
 eegfm/
   cbramod/          vendored CBraMod backbone (from wjq-learning/CBraMod)
   backbones.py      CBraMod / REVE behind one encode() interface
   core.py           input adaptation, SSL augmentations, heads, Tent + TTT
   smoke_test.py     loads a backbone and benchmarks this machine
 solvers/eegfm.py    the benchopt solver — all arms, both backbones live here
-weights/            three backbone checkpoints, ~20 MB each
+weights/            three CBraMod checkpoints, ~20 MB each (REVE comes from the Hub)
 run/
   smoke.sh          5-minute plumbing check
   matrix.sh         the experiment matrix
@@ -224,16 +256,24 @@ arm's weights.
 
 ## Not submission-ready
 
-`solvers/eegfm.py` imports from the `eegfm/` package. The competition
-contract allows **one file only**, so uploading to Codabench needs the backbone
-inlined into a single `submission.py` (~350 lines) plus ~20 MB of weights in the
-ZIP. Fine for benchmarking; do it before you upload.
+`solvers/eegfm.py` imports from the `eegfm/` package. The competition contract
+allows **one file only**, so uploading to Codabench needs everything inlined
+into a single `submission.py`.
+
+That is easy for CBraMod (~350 lines of backbone plus ~20 MB of weights in the
+ZIP) and awkward for REVE: `braindecode` is in the benchmark's
+`requirements.txt`, so `from braindecode.models import REVE` is importable on
+the worker, but the worker has **no network** — so the checkpoint must ride in
+the ZIP (0.28 GB base / 1.56 GB large) and be loaded with `load_state_dict`
+rather than `from_pretrained`. Check the platform's upload size limit before
+counting on `reve_large`. Fine for benchmarking either way; resolve it before
+you upload.
 
 ## Credits and licensing
 
-The vendored backbone (`cbramod/models/`) and the checkpoints in `weights/` come
+The vendored backbone (`eegfm/cbramod/`) and the checkpoints in `weights/` come
 from [wjq-learning/CBraMod](https://github.com/wjq-learning/CBraMod), MIT
-licensed, (c) 2025 Jiquan Wang — see `cbramod/models/{LICENSE,NOTICE}`. The only
+licensed, (c) 2025 Jiquan Wang — see `eegfm/cbramod/{LICENSE,NOTICE}`. The only
 change to that code is making one import package-relative.
 NeuroTTT recipe: [arXiv:2509.26301](https://arxiv.org/abs/2509.26301).
 REVE: [brain-bzh/reve](https://huggingface.co/collections/brain-bzh/reve),

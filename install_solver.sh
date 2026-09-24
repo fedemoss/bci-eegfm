@@ -10,3 +10,13 @@ DEST="$WORK/2026-competition/tracks/bci_decoding/solvers"
 [ -d "$DEST" ] || { echo "benchmark not found at $DEST — run setup.sh first"; exit 1; }
 cp "$EEGFM_HOME/solvers/eegfm.py" "$DEST/eegfm.py"
 echo "installed $DEST/eegfm.py"
+
+# benchopt discovers solvers by scanning this directory, so a file left behind
+# by an earlier version of this repo still registers a solver -- one that now
+# imports a package that no longer exists. Remove it.
+for stale in cbramod.py; do
+    if [ -f "$DEST/$stale" ]; then
+        rm -f "$DEST/$stale"
+        echo "removed stale $DEST/$stale (superseded by eegfm.py)"
+    fi
+done
