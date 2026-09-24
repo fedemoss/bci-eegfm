@@ -28,6 +28,23 @@ if ! conda env list | grep -qE "^${ENV_NAME}\s"; then
 fi
 conda activate "$ENV_NAME"
 
+# Bare `pip` is not safe here. `module load python/3.11.3` puts the cluster's
+# own python on PATH, and depending on load order (and bash's command hash)
+# `pip` can resolve to /opt/ohpc/.../python-3.11.3/bin/pip even while `python`
+# is conda's 3.12 — which silently user-installs everything into
+# ~/.local/lib/python3.11 and then fails, because neuralset 0.3.x needs >=3.12.
+# `python -m pip` always matches the interpreter. Assert it before installing.
+PY_BIN="$(command -v python)"
+case "$PY_BIN" in
+    "$CONDA_PREFIX"/*) ;;
+    *) echo "ERROR: python is $PY_BIN, not inside $CONDA_PREFIX — aborting"; exit 1 ;;
+esac
+python - <<'CHK'
+import sys
+assert sys.version_info[:2] >= (3, 12), f"need python >=3.12, got {sys.version}"
+print(f"using {sys.executable} ({sys.version.split()[0]})")
+CHK
+
 # The competition benchmark is a separate repo — it is what benchopt runs, and
 # it is not vendored here so it can be pulled independently.
 if [ ! -d "$BENCH_REPO/.git" ]; then
@@ -46,11 +63,11 @@ fi
 # mismatch ("expected 'typing-extensions', but metadata has
 # 'typing_extensions'"), falls back to the sdist, and then cannot find
 # flit_core to build it. Keeping PyPI in the search path avoids all of that.
-pip install --upgrade pip setuptools wheel
-pip install torch torchvision torchaudio \
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install torch torchvision torchaudio \
     --index-url "$TORCH_CHANNEL" \
     --extra-index-url https://pypi.org/simple
-pip install -r "$BENCH_REPO/requirements.txt"
+python -m pip install -r "$BENCH_REPO/requirements.txt"
 
 mkdir -p "$HOME/.neuralbench"
 cat > "$HOME/.neuralbench/config.json" <<EOF
